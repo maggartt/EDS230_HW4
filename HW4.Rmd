@@ -1,0 +1,167 @@
+---
+title: "Assignment 4: Sensitivity Analysis Using Latin Hypercube Sensitivity (LHS)"
+description: |
+  This assignment analyzes model sensitivity. 
+author: "Pol Carbo-Mestre & Trevor Maggart"
+output:
+  html_document:
+    code_folding: hide
+    theme: journal
+    toc: yes
+    toc_depth: 5
+    toc_float: yes
+    collapsed: yes
+    smooth_scroll: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align='center')
+library(sensitivity)
+library(tidyverse)
+library(lhs)
+library(purrr)
+library(here)
+library(ggpubr)
+```
+  
+  
+## Creating Our Samples
+
+Using the Latin Hypercube Sensitivity (LHS) method, we generate samples for our four parameters in our function: wind speed (m/s), vegetation height (m), roughness (Ko), and zero plane displacement (Kd). We then create an object `parm` to store the parameter values for analysis.
+
+```{r}
+# setting a random seed 
+set.seed(1)
+pnames = c("v", "height", "k_o", "k_d")
+
+# set the paramter length
+npar = length(pnames)
+
+# select the number of samples
+nsample = 100
+
+# create matrix with LHS values based on sample size and parameter names
+parm_quant = randomLHS(nsample, npar)
+colnames(parm_quant)=pnames
+
+# create a dataframe to store values
+parm = as.data.frame(matrix(nrow=nrow(parm_quant), ncol=ncol(parm_quant)))
+colnames(parm) = pnames
+
+# fill in the columns in the df with the distributed values
+parm[,"v"] = qnorm(parm_quant[,"v"], mean = 250, sd=30)
+parm[,"height"] = qunif(parm_quant[,"height"], min = 9.5, max = 10.5)
+
+# set the standard deviation for the k_o and k_d values 
+pvar = 0.01
+parm[, "k_o"] = qnorm(parm_quant[, "k_o"], mean = 0.1, sd = 0.1*pvar)
+parm[, "k_d"] = qnorm(parm_quant[, "k_d"], mean = 0.7, sd = 0.7*pvar)
+```
+  
+## Running our `Catm.R` model
+
+With the LHS values, we can now run our model. From here, we `cbind()` conductance results with input parameters, so that we can visualize our data for sensitivity analysis.
+
+```{r}
+# read in the catm.r function
+source(here("Catm-1.R"))
+
+# use pmap to run the function over all values
+results <- pmap(.l = parm, .f = Catm)
+
+results_df <- as.data.frame(results) %>% 
+  pivot_longer(everything()) %>% 
+  select(value) %>% 
+  rename(cond_value = value)
+
+# cbind conductance results with input parameters
+cond <- cbind.data.frame(parm, results_df)
+
+# use `gather()` to pivot the parameters
+cond_tidy = cond %>%  gather(v, height, k_o, k_d, value="parmvalue", key="parm")
+```
+
+## Plotting the results
+
+```{r}
+# Density plots to display parameter uncertainty input values
+p1<-ggplot(data = cond, aes(x = height)) +
+    theme_linedraw()+
+  theme(
+    axis.title.x = element_text(face = 'bold', size = 9.5, vjust = -0.5, family = "Avenir"),
+    axis.title.y = element_text(face = 'bold', size = 9.5, vjust = 2, family = "Avenir"),
+    axis.text = element_text(size = 7, family = "Avenir", face = "bold"),)+
+  geom_density() + labs(x = "Vegetation Height (m)", y = "Density\n") 
+p2<-ggplot(data=cond, aes(x=v)) +
+    theme_linedraw()+
+    theme(
+      axis.title.x = element_text(face = 'bold', size = 9.5, vjust = -0.5, family = "Avenir"),
+      axis.title.y = element_text(face = 'bold', size = 9.5, vjust = 2, family = "Avenir"),
+      axis.text = element_text(size = 7, family = "Avenir", face = "bold"),)+
+  geom_density() + labs(x = "Windspeed (m/s)", y = "Density\n") 
+p3<-ggplot(data=cond, aes(x=k_o)) +
+    theme_linedraw()+
+    theme(
+      axis.title.x = element_text(face = 'bold', size = 9.5, vjust = -0.5, family = "Avenir"),
+      axis.title.y = element_text(face = 'bold', size = 9.5, vjust = 2, family = "Avenir"),
+      axis.text = element_text(size = 7, family = "Avenir", face = "bold"),)+
+  geom_density() + labs(x = "Ko", y = "Density\n") 
+p4<-ggplot(data=cond, aes(x=k_d)) +
+    theme_linedraw()+
+    theme(
+      axis.title.x = element_text(face = 'bold', size = 9.5, vjust = -0.5, family = "Avenir"),
+      axis.title.y = element_text(face = 'bold', size = 9.5, vjust = 2, family = "Avenir"),
+      axis.text = element_text(size = 7, family = "Avenir", face = "bold"),)+
+  geom_density() + labs(x = "Kd", y = "Density\n") 
+## Arranging our density plots
+ggarrange(p1, p2, p3, p4)
+```
+
+```{r}
+## Labels for facet wrap
+parm_labs <- c("Height (m)", "Kd", "Ko", "Wind speed (m/s)")
+names(parm_labs) <- c("height", "k_d", "k_o", "v")
+## Plotting our parameter sensitivity
+ggplot(data = cond_tidy, aes(x = parmvalue, y = cond_value))+
+  geom_point(col = 'darkslategray4', alpha = 0.9, size = 1.5) +
+  geom_smooth(method=lm, color = "darkslategray", size = 0.5, fill = NA) +
+  geom_smooth(method=lm, color = NA, size = 0.5, fill = "darkslategray", alpha = 0.2) +
+  facet_wrap(~parm, scales="free", ncol=4, 
+             labeller = labeller(parm = parm_labs)) +
+  labs(y = "Conductance (mm/s)",
+       x = "Parameter Value") +
+theme_linedraw()+
+  theme(
+    axis.title.x = element_text(face = 'bold', size = 9.5, vjust = -0.5, family = "Avenir"),
+    axis.title.y = element_text(face = 'bold', size = 9.5, vjust = 2, family = "Avenir"),
+    axis.text = element_text(size = 7, family = "Avenir", face = "bold"),
+    panel.grid.minor.y = element_blank(),
+    strip.text = element_text(face = 'bold', family = "Avenir"),
+    strip.background = element_rect(fill = "darkslategray"),
+    legend.position = "none"
+  )
+```
+
+```{r}
+sen_result <- pcc(X = parm, y = results_df$cond_value, rank = TRUE)
+
+sen_result_plot <- sen_result[[7]][1] 
+sen_result_plot$parameter <- as.factor(row.names(sen_result_plot))
+sen_result_plot$parameter <- fct_reorder(sen_result_plot$parameter, -sen_result_plot$original)
+
+# plot of results
+ggplot(sen_result_plot, aes(x = parameter, y = original, label = round(original,3))) +
+  theme_linedraw() +
+  geom_point(size=4, alpha = 0.9, color = "darkslategray4") +
+  geom_text(hjust=-0.3, vjust=0, color = "darkslategray", family = "Avenir") +
+  labs(title = "Partial Rank Correlation Coefficient Values",
+       x = NULL,
+       y = "Values\n") +
+  theme(plot.title = element_text(hjust = 0.5, family = "Avenir"),
+        axis.title.y = element_text(family = "Avenir"),
+        axis.text.y = element_text(family = "Avenir"),
+        axis.text.x = element_text(family = "Avenir"))
+```
